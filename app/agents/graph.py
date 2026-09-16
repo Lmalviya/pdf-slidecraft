@@ -13,11 +13,13 @@ from app.agents.callbacks import ProgressTracker
 from app.agents.nodes import process_single_page
 from app.config import settings
 from app.core.logging_config import get_logger
-from app.models.enums import JobStatus, PageStatus
+from app.models.enums import JobStatus, PageStatus, ProcessingEngine
 from app.models.schemas import JobState, PageResult
+from app.services.nvidia_service import NvidiaVisionService
 from app.services.pdf_service import PDFService
 from app.services.ppt_service import PPTService
 from app.services.storage_service import StorageService
+from app.services.vlm_service import VLMService
 
 logger = get_logger(__name__)
 
@@ -26,15 +28,7 @@ INTERMEDIATE_SAVE_INTERVAL = 5
 
 
 class ConversionPipeline:
-    """Orchestrates the full PDF-to-PPT conversion.
-
-    Manages:
-    - PDF loading and page enumeration
-    - Parallel page processing (configurable workers)
-    - Progress tracking
-    - Intermediate PPT saves
-    - Final assembly and save
-    """
+    """Orchestrates the full PDF-to-PPT conversion across multiple selectable engines."""
 
     def __init__(self):
         self.pdf_service = PDFService()
@@ -46,8 +40,12 @@ class ConversionPipeline:
         self,
         pdf_content: bytes,
         pdf_filename: str,
+        engine: ProcessingEngine = ProcessingEngine.LOCAL_OCR,
+        nvidia_api_key: str | None = None,
+        nvidia_model: str = "meta/llama-3.2-11b-vision-instruct",
+        ollama_model: str = "qwen2.5vl:3b",
         parallel_workers: int = 2,
-        dpi: int = 200,
+        dpi: int = 150,
         image_quality: int = 85,
         progress_tracker: ProgressTracker | None = None,
     ) -> JobState:
@@ -56,6 +54,10 @@ class ConversionPipeline:
         Args:
             pdf_content: Raw PDF file bytes.
             pdf_filename: Original filename.
+            engine: Selected processing engine (LOCAL_OCR, NVIDIA_API, LOCAL_VLM).
+            nvidia_api_key: Optional NVIDIA API key.
+            nvidia_model: Model name for NVIDIA NIM Vision API.
+            ollama_model: Model name for local Ollama VLM.
             parallel_workers: Number of concurrent page workers.
             dpi: Rendering DPI.
             image_quality: JPEG quality for cropped images.
@@ -66,6 +68,10 @@ class ConversionPipeline:
         """
         job = JobState(
             pdf_filename=pdf_filename,
+            engine=engine,
+            nvidia_api_key=nvidia_api_key,
+            nvidia_model=nvidia_model,
+            ollama_model=ollama_model,
             parallel_workers=parallel_workers,
             dpi=dpi,
             image_quality=image_quality,
@@ -74,6 +80,20 @@ class ConversionPipeline:
         job.started_at = __import__("datetime").datetime.now()
 
         self.progress_tracker = progress_tracker
+
+        # Initialize optional engine services
+        nvidia_service: NvidiaVisionService | None = None
+        vlm_service: VLMService | None = None
+
+        if engine == ProcessingEngine.NVIDIA_API:
+            nvidia_service = NvidiaVisionService(
+                api_key=nvidia_api_key or settings.nvidia_api_key,
+                model=nvidia_model or settings.nvidia_default_model,
+            )
+        elif engine == ProcessingEngine.LOCAL_VLM:
+            vlm_service = VLMService(
+                model_name=ollama_model or settings.vlm_model_name,
+            )
 
         try:
             # Step 1: Create output directory
@@ -99,6 +119,7 @@ class ConversionPipeline:
             logger.info(
                 "pipeline_started",
                 job_id=job.job_id,
+                engine=engine.value,
                 pages=job.total_pages,
                 workers=parallel_workers,
             )
@@ -107,8 +128,7 @@ class ConversionPipeline:
             self.ppt_service = PPTService()
             self.ppt_service.create_presentation()
 
-            # Step 5: Process pages sequentially (ordered output required)
-            # We use an async semaphore to limit concurrency for VLM calls
+            # Step 5: Process pages sequentially/concurrently
             semaphore = asyncio.Semaphore(parallel_workers)
             page_results: dict[int, PageResult] = {}
 
@@ -120,11 +140,13 @@ class ConversionPipeline:
                         ppt_service=self.ppt_service,
                         output_dir=str(output_dir),
                         dpi=dpi,
+                        engine=engine,
+                        nvidia_service=nvidia_service,
+                        vlm_service=vlm_service,
                         progress_tracker=progress_tracker,
                     )
 
             # Process pages in order to maintain slide sequence
-            # But allow limited concurrency for VLM calls
             for batch_start in range(0, job.total_pages, parallel_workers):
                 batch_end = min(batch_start + parallel_workers, job.total_pages)
                 batch_pages = list(range(batch_start, batch_end))

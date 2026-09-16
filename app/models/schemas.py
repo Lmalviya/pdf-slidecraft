@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import ElementType, JobStatus, PageStatus
+from app.models.enums import ElementType, JobStatus, PageStatus, ProcessingEngine
 
 
 # --- Slide Element Schemas ---
@@ -48,7 +48,9 @@ class PageResult(BaseModel):
     page_number: int
     status: PageStatus = PageStatus.PENDING
     elements: list[SlideElement] = Field(default_factory=list)
-    processing_time_seconds: float = 0.0
+    duration_s: float = 0.0
+    image_elements_count: int = 0
+    text_elements_count: int = 0
     error_message: str | None = None
     log_message: str = ""
 
@@ -57,8 +59,12 @@ class PageResult(BaseModel):
 
 class JobRequest(BaseModel):
     """Request to start a PDF conversion job."""
+    engine: ProcessingEngine = Field(default=ProcessingEngine.LOCAL_OCR)
+    nvidia_api_key: str | None = None
+    nvidia_model: str = "meta/llama-3.2-11b-vision-instruct"
+    ollama_model: str = "qwen2.5vl:3b"
     parallel_workers: int = Field(default=2, ge=1, le=5)
-    dpi: int = Field(default=200, ge=100, le=400)
+    dpi: int = Field(default=150, ge=100, le=400)
     image_quality: int = Field(default=85, ge=50, le=100)
 
 
@@ -108,7 +114,12 @@ class JobState(BaseModel):
     completed_at: datetime | None = None
     errors: list[str] = Field(default_factory=list)
 
-    # Processing settings
+    # Engine & processing settings
+    engine: ProcessingEngine = ProcessingEngine.LOCAL_OCR
+    nvidia_api_key: str | None = None
+    nvidia_model: str = "meta/llama-3.2-11b-vision-instruct"
+    ollama_model: str = "qwen2.5vl:3b"
     parallel_workers: int = 2
-    dpi: int = 200
+    dpi: int = 150
     image_quality: int = 85
+

@@ -34,3 +34,11 @@ class PageStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     FALLBACK = "fallback"
+
+
+class ProcessingEngine(str, Enum):
+    """Supported processing engines."""
+    LOCAL_OCR = "local_ocr"       # RapidOCR + OpenCV Layout (Fast, CPU, Offline)
+    NVIDIA_API = "nvidia_api"     # NVIDIA NIM Cloud Vision API (Free tier models)
+    LOCAL_VLM = "local_vlm"       # Ollama Qwen2.5-VL (Local VLM)
+
