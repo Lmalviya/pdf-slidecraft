@@ -25,9 +25,28 @@ def test_html_parser_with_bboxes():
     assert elements[4].element_type == ElementType.IMAGE
 
 
+def test_html_parser_image_div_and_alias():
+    parser = HTMLParserService()
+    html = """
+    <html><body>
+    <h1>TYPES OF SCOLIOSIS</h1>
+    <ul>
+      <li>1. IDIOPATHIC SCOLIOSIS</li>
+      <li>a) Infantile</li>
+    </ul>
+    <div class="image" data-bbox="[200, 500, 800, 950]"></div>
+    </body></html>
+    """
+    elements = parser.parse_html_to_elements(html, 1920, 1080)
+    assert len(elements) == 4
+    assert elements[0].element_type == ElementType.HEADING
+    assert elements[0].text == "TYPES OF SCOLIOSIS"
+    assert elements[3].element_type == ElementType.IMAGE
+    assert elements[3].bbox.x1 > 0
+
+
 def test_html_parser_without_bboxes_flow_layout():
     parser = HTMLParserService()
-    # Simulating what Qwen2.5-VL previously produced
     html = """
     ```html
     <html><body>
@@ -44,7 +63,6 @@ def test_html_parser_without_bboxes_flow_layout():
     assert elements[0].text == "Achievements & Positions"
     assert elements[1].element_type == ElementType.BULLET
     assert "Co-authored" in elements[1].text
-    # Flow bboxes should be assigned
     assert elements[0].bbox.y1 < elements[1].bbox.y1
     assert elements[1].bbox.y1 < elements[2].bbox.y1
     assert elements[0].bbox.width > 0

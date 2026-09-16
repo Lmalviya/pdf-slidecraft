@@ -66,12 +66,8 @@ class HTMLParserService:
             raw_elements: list[SlideElement] = []
 
             # 1. First pass: try to find structured semantic tags
-            target_tags = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "td", "th", "blockquote", "img"]
+            target_tags = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "td", "th", "blockquote", "img", "div", "figure"]
             found_tags = soup.find_all(target_tags)
-
-            # If no standard tags, check for any divs or paragraphs with text
-            if not found_tags:
-                found_tags = [t for t in soup.find_all(["div", "span"]) if t.get_text(strip=True)]
 
             for tag in found_tags:
                 element = self._process_tag(tag)
@@ -102,11 +98,14 @@ class HTMLParserService:
 
         except Exception as e:
             logger.error("html_parse_unexpected_error", error=str(e), exc_info=True)
-            # Try plain text fallback before failing
             fallback = self._parse_fallback_text(html_content)
             if fallback:
                 return self._assign_flow_bboxes(fallback, default_width, default_height)
             return []
+
+    def parse_html_to_elements(self, html_content: str, default_width: int = 512, default_height: int = 660) -> list[SlideElement]:
+        """Convenience alias for parse()."""
+        return self.parse(html_content, default_width=default_width, default_height=default_height)
 
     def _clean_html(self, html: str) -> str:
         """Clean common VLM output artifacts."""
@@ -118,19 +117,28 @@ class HTMLParserService:
         """Process a single HTML tag into a SlideElement."""
         tag_name = tag.name.lower() if tag.name else ""
 
-        # Skip container-only lists if we already process the <li> items
+        # Skip container-only tags
         if tag_name in ("ul", "ol", "table", "tbody", "thead", "tr", "html", "body", "head"):
             return None
 
-        # Check for image
-        if tag_name == "img":
+        classes = tag.get("class", [])
+        if isinstance(classes, str):
+            classes = classes.split()
+
+        # Check for image div or img tag
+        is_image = tag_name == "img" or "image" in classes or tag_name == "figure"
+        if is_image:
             bbox = self._parse_bbox(tag)
-            alt = tag.get("alt", "image")
+            alt = tag.get("alt") or tag.get("data-alt") or "image_region"
             return SlideElement(
                 element_type=ElementType.IMAGE,
                 bbox=bbox or BBox(x1=0, y1=0, x2=100, y2=100),
                 text=str(alt),
             )
+
+        # For normal divs, only process if they have direct text and are not generic wrappers
+        if tag_name == "div" and not tag.get("data-bbox"):
+            return None
 
         element_type = TAG_TYPE_MAP.get(tag_name, ElementType.PARAGRAPH)
 
@@ -165,8 +173,10 @@ class HTMLParserService:
         )
 
     def _parse_bbox(self, tag: Tag) -> BBox | None:
-        """Extract data-bbox attribute and parse into BBox object."""
-        raw = tag.get("data-bbox") or tag.get("bbox") or tag.get("box")
+        """Extract data-bbox attribute and parse into BBox object.
+        Supports [ymin, xmin, ymax, xmax] standard VLM coordinate order or [x1, y1, x2, y2].
+        """
+        raw = tag.get("data-bbox") or tag.get("bbox") or tag.get("box") or tag.get("data_bbox")
         if not raw:
             return None
 
@@ -182,7 +192,14 @@ class HTMLParserService:
             if len(coords) != 4:
                 return None
 
-            x1, y1, x2, y2 = coords
+            # Standard VLM output order is [ymin, xmin, ymax, xmax]
+            # Convert to [x1, y1, x2, y2]
+            c0, c1, c2, c3 = coords
+            if c0 <= 1000 and c1 <= 1000 and c2 <= 1000 and c3 <= 1000:
+                # If in [ymin, xmin, ymax, xmax] order (where y1=c0, x1=c1, y2=c2, x2=c3)
+                y1, x1, y2, x2 = c0, c1, c2, c3
+            else:
+                x1, y1, x2, y2 = c0, c1, c2, c3
 
             # Ensure valid bounds
             if x2 < x1:
