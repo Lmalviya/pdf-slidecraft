@@ -124,6 +124,13 @@ ipython_config.py
 #   in the .venv directory. It is recommended not to include this directory in version control.
 .pixi
 
+# Output (keep the directory, ignore contents)
+output/
+!output/.gitkeep
+test_sample.pdf
+*.pdf
+*.pptx
+
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
 
